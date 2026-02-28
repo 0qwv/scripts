@@ -22,7 +22,7 @@ local jukeEnabled = false
 
 local attackRange = 8 
 local farmDetectRange = 18
-local jukeRange = 7 -- Fixed 8-stud distance
+local jukeRange = 6 -- Fixed 8-stud distance
 local currentSide = 1 -- 1 for Right side, -1 for Left side
 
 local startPos = nil
