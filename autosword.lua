@@ -1,4 +1,4 @@
--- Modern Auto-Sword & Farm Script (STFO Edition)
+-- Modern Auto-Sword & Farm Script (STFO Edition + Side-Lock Flanker)
 -- Place this in a LocalScript
 
 local Players = game:GetService("Players")
@@ -10,13 +10,20 @@ local player = Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
 local hrp = character:WaitForChild("HumanoidRootPart")
 
+-- // MOVEMENT CONTROL SETUP // --
+local PlayerModule = require(player:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule"))
+local Controls = PlayerModule:GetControls()
+
 -- // STATE VARIABLES // --
 local scriptRunning = true
 local swordEnabled = false
 local farmEnabled = false
+local jukeEnabled = false 
 
-local attackRange = 10 
+local attackRange = 8 
 local farmDetectRange = 18
+local jukeRange = 6 -- Fixed 8-stud distance
+local currentSide = 1 -- 1 for Right side, -1 for Left side
 
 local startPos = nil
 local farmPos = nil
@@ -25,22 +32,17 @@ local farmPos = nil
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "QWVSwordGui"
 screenGui.ResetOnSpawn = false
-screenGui.DisplayOrder = 10
 screenGui.Parent = player:WaitForChild("PlayerGui")
 
 local mainFrame = Instance.new("Frame")
-mainFrame.Name = "MainFrame"
-mainFrame.Size = UDim2.new(0, 240, 0, 140) 
+mainFrame.Size = UDim2.new(0, 240, 0, 180) 
 mainFrame.Position = UDim2.new(0.5, -120, 0.4, 0)
 mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-mainFrame.BorderSizePixel = 0
 mainFrame.Active = true
 mainFrame.Draggable = true 
 mainFrame.Parent = screenGui
-
 Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 10)
 
--- X Close Button
 local closeBtn = Instance.new("TextButton")
 closeBtn.Size = UDim2.new(0, 25, 0, 25)
 closeBtn.Position = UDim2.new(1, -30, 0, 5)
@@ -60,35 +62,8 @@ title.TextSize = 18
 title.Font = Enum.Font.GothamBold
 title.Parent = mainFrame
 
--- Tooltip Popup Box (Hidden by default)
-local tooltipBox = Instance.new("Frame")
-tooltipBox.Size = UDim2.new(0, 180, 0, 60)
-tooltipBox.Position = UDim2.new(1, 5, 0.5, 0)
-tooltipBox.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-tooltipBox.BorderSizePixel = 0
-tooltipBox.Visible = false
-tooltipBox.ZIndex = 20
-tooltipBox.Parent = mainFrame
-
-Instance.new("UICorner", tooltipBox).CornerRadius = UDim.new(0, 6)
-local stroke = Instance.new("UIStroke", tooltipBox)
-stroke.Color = Color3.fromRGB(60, 60, 60)
-stroke.Thickness = 1
-
-local tooltipText = Instance.new("TextLabel")
-tooltipText.Size = UDim2.new(0.9, 0, 0.9, 0)
-tooltipText.Position = UDim2.new(0.05, 0, 0.05, 0)
-tooltipText.BackgroundTransparency = 1
-tooltipText.Text = "to use: go really close to the edge of the spawn border but stay inside, and face the outside, then turn it on"
-tooltipText.TextColor3 = Color3.fromRGB(200, 200, 200)
-tooltipText.TextSize = 11
-tooltipText.Font = Enum.Font.Gotham
-tooltipText.TextWrapped = true
-tooltipText.ZIndex = 21
-tooltipText.Parent = tooltipBox
-
 -- Helper function to create uniform toggle buttons
-local function createToggleRow(name, yOffset, showHelp)
+local function createToggleRow(name, yOffset)
 	local container = Instance.new("Frame")
 	container.Size = UDim2.new(0.9, 0, 0, 40)
 	container.Position = UDim2.new(0.05, 0, 0, yOffset)
@@ -105,23 +80,6 @@ local function createToggleRow(name, yOffset, showHelp)
 	label.TextXAlignment = Enum.TextXAlignment.Left
 	label.Parent = container
 
-	if showHelp then
-		local helpIcon = Instance.new("TextLabel")
-		helpIcon.Size = UDim2.new(0, 16, 0, 16)
-		helpIcon.Position = UDim2.new(0, label.TextBounds.X + 5, 0.5, -8)
-		helpIcon.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-		helpIcon.Text = "?"
-		helpIcon.TextColor3 = Color3.fromRGB(255, 255, 255)
-		helpIcon.TextSize = 12
-		helpIcon.Font = Enum.Font.GothamBold
-		helpIcon.Active = true
-		helpIcon.Parent = container
-		Instance.new("UICorner", helpIcon).CornerRadius = UDim.new(1, 0)
-
-		helpIcon.MouseEnter:Connect(function() tooltipBox.Visible = true end)
-		helpIcon.MouseLeave:Connect(function() tooltipBox.Visible = false end)
-	end
-
 	local btn = Instance.new("TextButton")
 	btn.Size = UDim2.new(0, 50, 0, 24)
 	btn.Position = UDim2.new(1, -50, 0.5, -12)
@@ -137,34 +95,22 @@ local function createToggleRow(name, yOffset, showHelp)
 	return btn
 end
 
-local btnAutoSword = createToggleRow("auto sword", 40, false)
-local btnFarmTime = createToggleRow("farm time (stfo)", 85, true)
+local btnAutoSword = createToggleRow("auto sword", 40)
+local btnFarmTime = createToggleRow("farm time (stfo)", 85)
+local btnAutoJuke = createToggleRow("auto juke", 130)
 
 -- // LOGIC FUNCTIONS // --
-local function isFFA()
-	local activeTeams = Teams:GetTeams()
-	if #activeTeams <= 1 then return true end 
-	local firstTeam = nil
-	for _, p in pairs(Players:GetPlayers()) do
-		if not firstTeam then firstTeam = p.Team
-		elseif p.Team ~= firstTeam then return false end
-	end
-	return true
-end
-
-local function getClosestEnemy()
-	local closestPlayer, shortestDistance = nil, attackRange
-	local ffaMode = isFFA()
+local function getClosestEnemy(customRange)
+	local range = customRange or attackRange
+	local closestPlayer, shortestDistance = nil, range
 	for _, v in pairs(Players:GetPlayers()) do
 		if v ~= player and v.Character and v.Character:FindFirstChild("HumanoidRootPart") then
-			if ffaMode or (v.Team ~= player.Team) then
-				local targetHum = v.Character:FindFirstChild("Humanoid")
-				if targetHum and targetHum.Health > 0 then
-					local distance = (hrp.Position - v.Character.HumanoidRootPart.Position).Magnitude
-					if distance < shortestDistance then
-						closestPlayer = v
-						shortestDistance = distance
-					end
+			local targetHum = v.Character:FindFirstChild("Humanoid")
+			if targetHum and targetHum.Health > 0 then
+				local distance = (hrp.Position - v.Character.HumanoidRootPart.Position).Magnitude
+				if distance < shortestDistance then
+					closestPlayer = v
+					shortestDistance = distance
 				end
 			end
 		end
@@ -172,27 +118,13 @@ local function getClosestEnemy()
 	return closestPlayer
 end
 
-local function isAnyPlayerWithin(radius)
-	for _, v in pairs(Players:GetPlayers()) do
-		if v ~= player and v.Character and v.Character:FindFirstChild("HumanoidRootPart") then
-			local targetHum = v.Character:FindFirstChild("Humanoid")
-			if targetHum and targetHum.Health > 0 then
-				if (hrp.Position - v.Character.HumanoidRootPart.Position).Magnitude <= radius then
-					return true
-				end
-			end
-		end
-	end
-	return false
-end
-
--- // CONNECTIONS // --
 local function animateToggle(btn, state)
 	local targetColor = state and Color3.fromRGB(0, 170, 127) or Color3.fromRGB(45, 45, 45)
 	TweenService:Create(btn, TweenInfo.new(0.3), {BackgroundColor3 = targetColor}):Play()
 	btn.Text = state and "ON" or "OFF"
 end
 
+-- // BUTTON CLICKS // --
 btnAutoSword.MouseButton1Click:Connect(function()
 	swordEnabled = not swordEnabled
 	animateToggle(btnAutoSword, swordEnabled)
@@ -207,6 +139,13 @@ btnFarmTime.MouseButton1Click:Connect(function()
 	end
 end)
 
+btnAutoJuke.MouseButton1Click:Connect(function()
+	jukeEnabled = not jukeEnabled
+	animateToggle(btnAutoJuke, jukeEnabled)
+	if not jukeEnabled then Controls:Enable() end
+end)
+
+-- // MAIN LOOP // --
 local mainLoop
 mainLoop = RunService.Heartbeat:Connect(function()
 	if not scriptRunning then return end
@@ -216,30 +155,70 @@ mainLoop = RunService.Heartbeat:Connect(function()
 	local humanoid = character:FindFirstChild("Humanoid")
 	if not hrp or not humanoid then return end
 
-	if farmEnabled and startPos and farmPos then
-		if isAnyPlayerWithin(farmDetectRange) then
-			humanoid:MoveTo(startPos)
-		else
-			humanoid:MoveTo(farmPos)
+	local tool = character:FindFirstChildOfClass("Tool")
+	local activeTarget = nil
+
+	-- 1. Auto Sword
+	if swordEnabled and tool then
+		activeTarget = getClosestEnemy(attackRange)
+		if activeTarget and activeTarget.Character then
+			local targetHRP = activeTarget.Character:FindFirstChild("HumanoidRootPart")
+			if targetHRP then
+				hrp.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(targetHRP.Position.X, hrp.Position.Y, targetHRP.Position.Z))
+				tool:Activate()
+			end
 		end
 	end
 
-	if swordEnabled then
-		local target = getClosestEnemy()
-		if target and target.Character then
-			local targetHRP = target.Character:FindFirstChild("HumanoidRootPart")
-			if targetHRP then
-				local lookPos = Vector3.new(targetHRP.Position.X, hrp.Position.Y, targetHRP.Position.Z)
-				hrp.CFrame = CFrame.lookAt(hrp.Position, lookPos)
-				local tool = character:FindFirstChildOfClass("Tool")
-				if tool then tool:Activate() end
+	-- 2. "Side-Lock" Auto Juke
+	if jukeEnabled then
+		if tool then
+			local jukeTarget = activeTarget or getClosestEnemy(jukeRange + 4)
+			
+			if jukeTarget and jukeTarget.Character and jukeTarget.Character:FindFirstChild("HumanoidRootPart") then
+				local tHRP = jukeTarget.Character.HumanoidRootPart
+				local dist = (hrp.Position - tHRP.Position).Magnitude
+				
+				if dist <= jukeRange + 5 then
+					Controls:Disable() -- Take control of movement
+
+					-- Calculate Flank Positions (8 studs to the left and right)
+					local leftFlank = (tHRP.CFrame * CFrame.new(-jukeRange, 0, -3)).Position
+					local rightFlank = (tHRP.CFrame * CFrame.new(jukeRange, 0, 3)).Position
+
+					-- Check which side is currently closer to us (quickest way)
+					local distToLeft = (hrp.Position - leftFlank).Magnitude
+					local distToRight = (hrp.Position - rightFlank).Magnitude
+
+					-- Choose the side and "Lock" to it
+					local goalPos = (distToLeft < distToRight) and leftFlank or rightFlank
+					
+					-- Move to the specific side-point
+					humanoid:MoveTo(goalPos)
+				else
+					Controls:Enable()
+				end
+			else
+				Controls:Enable()
 			end
+		else
+			Controls:Enable()
+		end
+	end
+
+	-- 3. Farm Logic
+	if farmEnabled and not (jukeEnabled and tool and getClosestEnemy(jukeRange + 4)) then
+		Controls:Enable()
+		if startPos and farmPos then
+			local targetNearby = getClosestEnemy(farmDetectRange)
+			humanoid:MoveTo(targetNearby and startPos or farmPos)
 		end
 	end
 end)
 
 closeBtn.MouseButton1Click:Connect(function()
 	scriptRunning = false
+	Controls:Enable()
 	if mainLoop then mainLoop:Disconnect() end
 	screenGui:Destroy()
 end)
