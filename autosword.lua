@@ -15,8 +15,8 @@ local scriptRunning = true
 local swordEnabled = false
 local farmEnabled = false
 
-local attackRange = 9 
-local farmDetectRange = 15
+local attackRange = 8 
+local farmDetectRange = 18
 
 local startPos = nil
 local farmPos = nil
